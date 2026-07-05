@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse
 from . import models
 from .database import engine
 from .routers import sync, products, auth, analytics, admin
+from .routers.auth import team_router
 
 app = FastAPI(title="Faida POS Backend")
 
@@ -18,6 +19,7 @@ app.add_middleware(
 models.Base.metadata.create_all(bind=engine)
 
 app.include_router(auth.router)
+app.include_router(team_router)
 app.include_router(sync.router)
 app.include_router(products.router)
 app.include_router(analytics.router)

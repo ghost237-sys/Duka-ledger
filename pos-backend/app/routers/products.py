@@ -49,13 +49,32 @@ def delete_category(category_id: str, db: Session = Depends(get_db)):
 
 @router.get("/skus", response_model=List[schemas.SKUOut])
 def list_skus(shop_id: str, q: str = "", db: Session = Depends(get_db)):
-    """Full SKU list for phone to download into local SQLite on sync."""
-    query = db.query(models.SKU).filter(
-        models.SKU.shop_id == shop_id,
-        models.SKU.is_active == True,
+    """
+    Full SKU list for phone to download into local SQLite on sync.
+    Search is full-text across SKU name, brand name, manufacturer,
+    and category name — so 'kidole', 'fresh', 'brook' all find the
+    right items regardless of which field the term appears in.
+    """
+    query = (
+        db.query(models.SKU)
+        .outerjoin(models.Product, models.SKU.product_id == models.Product.id)
+        .outerjoin(models.Category, models.Product.category_id == models.Category.id)
+        .filter(
+            models.SKU.shop_id == shop_id,
+            models.SKU.is_active == True,
+        )
     )
     if q:
-        query = query.filter(models.SKU.name.ilike(f"%{q}%"))
+        term = f"%{q}%"
+        from sqlalchemy import or_
+        query = query.filter(
+            or_(
+                models.SKU.name.ilike(term),
+                models.Product.brand_name.ilike(term),
+                models.Product.manufacturer.ilike(term),
+                models.Category.name.ilike(term),
+            )
+        )
     return query.order_by(models.SKU.name).all()
 
 
@@ -147,6 +166,7 @@ def update_sku(
     buying_price: Optional[float] = None,
     stock_qty: Optional[int] = None,
     product_id: Optional[str] = None,
+    category_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """Update a SKU — including linking an unlinked Quick Add to a parent product."""
@@ -164,6 +184,27 @@ def update_sku(
         sku.stock_qty = stock_qty
     if product_id is not None:
         sku.product_id = product_id
+    if category_id is not None:
+        # Find or create a product for this category to link the SKU to
+        existing_product = db.query(models.Product).filter(
+            models.Product.shop_id == sku.shop_id,
+            models.Product.category_id == category_id,
+            models.Product.brand_name == sku.name,
+        ).first()
+        if existing_product:
+            sku.product_id = existing_product.id
+        else:
+            import uuid
+            new_product = models.Product(
+                shop_id=sku.shop_id,
+                client_id=str(uuid.uuid4()),
+                brand_name=sku.name,
+                category_id=category_id,
+                created_via=models.CreatedVia.quick_add,
+            )
+            db.add(new_product)
+            db.flush()
+            sku.product_id = new_product.id
     db.commit()
     db.refresh(sku)
     return sku

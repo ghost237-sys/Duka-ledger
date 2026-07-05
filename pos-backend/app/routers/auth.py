@@ -8,6 +8,8 @@ from ..database import get_db
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+team_router = APIRouter(prefix="/team", tags=["team"])
+
 # Simple in-memory token store for now.
 # In production replace with JWT or a tokens table in the DB.
 _tokens = {}
@@ -82,3 +84,113 @@ def register(
     db.commit()
     db.refresh(shopkeeper)
     return {"id": shopkeeper.id, "name": shopkeeper.name, "role": shopkeeper.role}
+
+
+
+
+@router.get("/team")
+def get_team(shop_id: str, db: Session = Depends(get_db)):
+    """All shopkeepers belonging to a shop."""
+    members = (
+        db.query(models.Shopkeeper)
+        .filter(models.Shopkeeper.shop_id == shop_id)
+        .order_by(models.Shopkeeper.created_at)
+        .all()
+    )
+    return [
+        {
+            "id": m.id,
+            "name": m.name,
+            "phone": m.phone,
+            "role": m.role,
+            "is_active": m.is_active,
+            "created_at": m.created_at.isoformat(),
+        }
+        for m in members
+    ]
+
+
+@router.post("/team/{shopkeeper_id}/toggle")
+def toggle_active(shopkeeper_id: str, db: Session = Depends(get_db)):
+    """Activate or deactivate a shopkeeper account."""
+    shopkeeper = db.query(models.Shopkeeper).filter(
+        models.Shopkeeper.id == shopkeeper_id
+    ).first()
+    if not shopkeeper:
+        raise HTTPException(status_code=404, detail="Shopkeeper not found")
+    shopkeeper.is_active = not shopkeeper.is_active
+    db.commit()
+    return {"id": shopkeeper.id, "is_active": shopkeeper.is_active}
+
+
+team_router = APIRouter(prefix="/team", tags=["team"])
+
+@team_router.get("")
+def get_team(shop_id: str, db: Session = Depends(get_db)):
+    members = (
+        db.query(models.Shopkeeper)
+        .filter(models.Shopkeeper.shop_id == shop_id)
+        .order_by(models.Shopkeeper.created_at)
+        .all()
+    )
+    return [
+        {
+            "id": m.id,
+            "name": m.name,
+            "phone": m.phone,
+            "role": m.role,
+            "is_active": m.is_active,
+            "created_at": m.created_at.isoformat(),
+        }
+        for m in members
+    ]
+
+
+@team_router.post("/{shopkeeper_id}/toggle")
+def toggle_active(shopkeeper_id: str, db: Session = Depends(get_db)):
+    shopkeeper = db.query(models.Shopkeeper).filter(
+        models.Shopkeeper.id == shopkeeper_id
+    ).first()
+    if not shopkeeper:
+        raise HTTPException(status_code=404, detail="Shopkeeper not found")
+    shopkeeper.is_active = not shopkeeper.is_active
+    db.commit()
+    return {"id": shopkeeper.id, "is_active": shopkeeper.is_active}
+
+@team_router.post("/{shopkeeper_id}/edit")
+def edit_shopkeeper(
+    shopkeeper_id: str,
+    name: str,
+    phone: str,
+    pin: str = None,
+    db: Session = Depends(get_db),
+):
+    import hashlib
+    shopkeeper = db.query(models.Shopkeeper).filter(
+        models.Shopkeeper.id == shopkeeper_id
+    ).first()
+    if not shopkeeper:
+        raise HTTPException(status_code=404, detail="Shopkeeper not found")
+
+    # Check phone uniqueness if changed
+    if phone != shopkeeper.phone:
+        existing = db.query(models.Shopkeeper).filter(
+            models.Shopkeeper.phone == phone
+        ).first()
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail="Phone number already in use by another account"
+            )
+
+    shopkeeper.name = name
+    shopkeeper.phone = phone
+    if pin and pin.strip():
+        shopkeeper.pin_hash = hashlib.sha256(pin.encode()).hexdigest()
+
+    db.commit()
+    return {
+        "id": shopkeeper.id,
+        "name": shopkeeper.name,
+        "phone": shopkeeper.phone,
+    }
