@@ -64,6 +64,18 @@ class Shopkeeper(Base):
 
     shop = relationship("Shop", back_populates="shopkeepers")
     sales = relationship("Sale", back_populates="shopkeeper")
+    auth_tokens = relationship("AuthToken", back_populates="shopkeeper", cascade="all, delete-orphan")
+
+
+class AuthToken(Base):
+    """Persisted login tokens so server restarts don't invalidate active sessions."""
+    __tablename__ = "auth_tokens"
+
+    token = Column(String, primary_key=True)
+    shopkeeper_id = Column(String, ForeignKey("shopkeepers.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    shopkeeper = relationship("Shopkeeper", back_populates="auth_tokens")
 
 
 # ─────────────────────────────────────────

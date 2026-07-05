@@ -10,21 +10,16 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 team_router = APIRouter(prefix="/team", tags=["team"])
 
-# Simple in-memory token store for now.
-# In production replace with JWT or a tokens table in the DB.
-_tokens = {}
-
-
 def hash_pin(pin: str) -> str:
     return hashlib.sha256(pin.encode()).hexdigest()
 
 
 def get_shopkeeper_by_token(token: str, db: Session) -> models.Shopkeeper:
-    shopkeeper_id = _tokens.get(token)
-    if not shopkeeper_id:
+    row = db.query(models.AuthToken).filter(models.AuthToken.token == token).first()
+    if not row:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     shopkeeper = db.query(models.Shopkeeper).filter(
-        models.Shopkeeper.id == shopkeeper_id,
+        models.Shopkeeper.id == row.shopkeeper_id,
         models.Shopkeeper.is_active == True,
     ).first()
     if not shopkeeper:
@@ -42,7 +37,8 @@ def login(payload: schemas.LoginIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Wrong phone number or PIN")
 
     token = secrets.token_hex(32)
-    _tokens[token] = shopkeeper.id
+    db.add(models.AuthToken(token=token, shopkeeper_id=shopkeeper.id))
+    db.commit()
 
     return schemas.LoginOut(
         token=token,
@@ -66,9 +62,15 @@ def register(
     db: Session = Depends(get_db),
 ):
     """
-    Dev/admin endpoint for creating shopkeeper accounts.
-    Call this manually via curl to set up accounts -- not exposed to the app UI.
+    Create a shopkeeper account for a shop.
+    Used by the owner from the Team screen in the app.
     """
+    if not shop_id:
+        raise HTTPException(status_code=400, detail="shop_id is required")
+
+    shop = db.query(models.Shop).filter(models.Shop.id == shop_id).first()
+    if not shop:
+        raise HTTPException(status_code=404, detail="Shop not found")
     existing = db.query(models.Shopkeeper).filter(models.Shopkeeper.phone == phone).first()
     if existing:
         raise HTTPException(status_code=400, detail="Phone number already registered")
