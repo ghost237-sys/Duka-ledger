@@ -1,0 +1,23 @@
+services:
+  # FastAPI Backend Web Service
+  - type: web
+    name: duka-ledger-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    rootDir: pos-backend
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: duka-ledger-db
+          property: connectionString
+      - key: ADMIN_PASSWORD
+        sync: false
+        value: faida-admin-2024  # Change this to a secure password on Render UI
+
+databases:
+  # PostgreSQL Database Instance
+  - name: duka-ledger-db
+    databaseName: duka_ledger
+    plan: free

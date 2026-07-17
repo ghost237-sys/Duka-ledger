@@ -45,6 +45,23 @@ def delete_category(category_id: str, db: Session = Depends(get_db)):
     return {"deleted": category_id}
 
 
+@router.patch("/categories/{category_id}", response_model=schemas.CategoryOut)
+def update_category(
+    category_id: str,
+    name: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Update a category (owner only)."""
+    cat = db.query(models.Category).filter(models.Category.id == category_id).first()
+    if not cat:
+        raise HTTPException(status_code=404, detail="Category not found")
+    if name is not None:
+        cat.name = name
+    db.commit()
+    db.refresh(cat)
+    return cat
+
+
 # ── SKUs (what the checkout screen searches) ─────────────────────────────────
 
 @router.get("/skus", response_model=List[schemas.SKUOut])
@@ -158,6 +175,40 @@ def add_sku_to_product(
     return sku
 
 
+@router.patch("/products/{product_id}", response_model=schemas.ProductOut)
+def update_product(
+    product_id: str,
+    brand_name: Optional[str] = None,
+    manufacturer: Optional[str] = None,
+    category_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Update a product (owner only)."""
+    product = db.query(models.Product).filter(models.Product.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    if brand_name is not None:
+        product.brand_name = brand_name
+    if manufacturer is not None:
+        product.manufacturer = manufacturer
+    if category_id is not None:
+        product.category_id = category_id
+    db.commit()
+    db.refresh(product)
+    return product
+
+
+@router.delete("/products/{product_id}")
+def delete_product(product_id: str, db: Session = Depends(get_db)):
+    """Delete a product (owner only)."""
+    product = db.query(models.Product).filter(models.Product.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    db.delete(product)
+    db.commit()
+    return {"deleted": product_id}
+
+
 @router.patch("/skus/{sku_id}", response_model=schemas.SKUOut)
 def update_sku(
     sku_id: str,
@@ -208,3 +259,14 @@ def update_sku(
     db.commit()
     db.refresh(sku)
     return sku
+
+
+@router.delete("/skus/{sku_id}")
+def delete_sku(sku_id: str, db: Session = Depends(get_db)):
+    """Delete a SKU (owner only)."""
+    sku = db.query(models.SKU).filter(models.SKU.id == sku_id).first()
+    if not sku:
+        raise HTTPException(status_code=404, detail="SKU not found")
+    db.delete(sku)
+    db.commit()
+    return {"deleted": sku_id}

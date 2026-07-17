@@ -130,6 +130,7 @@ def _nav():
         <a href="/admin">Dashboard</a>
         <a href="/admin/shops">Shops</a>
         <a href="/admin/owners">Owners</a>
+        <a href="/admin/bulk-import">Bulk Import</a>
         <a href="/admin/logout">Logout</a>
       </div>
     </nav>
@@ -779,3 +780,181 @@ def reset_pin(
         owner.pin_hash = hashlib.sha256(new_pin.encode()).hexdigest()
         db.commit()
     return RedirectResponse(url="/admin/owners", status_code=302)
+
+
+@router.get("/bulk-import", response_class=HTMLResponse)
+def bulk_import_page(request: Request, db: Session = Depends(get_db)):
+    _check_session(request)
+    shops = db.query(models.Shop).all()
+    
+    shops_options = "".join(
+        f'<option value="{s.id}">{s.name}</option>' for s in shops
+    )
+    
+    body = f"""
+    <h1>Bulk Catalog Import</h1>
+    <div class="card">
+      <h2>Import Items, Brands & Categories in Scale</h2>
+      <p style="margin-bottom:20px; color:#888;">Copy and paste your inventory list from Excel/Sheets or format it as CSV.</p>
+      
+      <form method="POST" action="/admin/bulk-import">
+        <div style="margin-bottom: 16px;">
+          <label style="display:block; margin-bottom:8px; font-weight:bold;">SELECT SHOP</label>
+          <select name="shop_id" required style="max-width:300px;">
+            <option value="">-- Select Shop --</option>
+            {shops_options}
+          </select>
+        </div>
+        
+        <div style="margin-bottom: 16px;">
+          <label style="display:block; margin-bottom:8px; font-weight:bold;">PASTE CSV DATA</label>
+          <p style="font-size:12px; color:#888; margin-bottom:6px;">
+            Format must be comma-separated: <strong>Category, Brand, Manufacturer, SKU Name, Selling Price, Buying Price, Stock Qty</strong>
+          </p>
+          <textarea name="csv_data" rows="12" placeholder="e.g.&#10;Bakery,Bakers Inn,Bakers Inn Ltd,Bakers Inn 400g,60,48,20&#10;Beverages,Coca-Cola,Coca-Cola Company,Coke 500ml,70,55,50" required style="width:100%; font-family:monospace; padding:12px; border: 1px solid #D8D2C2; border-radius:8px;"></textarea>
+        </div>
+        
+        <button type="submit" style="max-width:200px;">Import Catalog</button>
+      </form>
+    </div>
+    """
+    return _base("Bulk Import", body)
+
+
+@router.post("/bulk-import", response_class=HTMLResponse)
+def handle_bulk_import(
+    request: Request,
+    shop_id: str = Form(...),
+    csv_data: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    _check_session(request)
+    import csv
+    import io
+    import uuid
+    from decimal import Decimal
+    
+    # Process csv_data
+    lines = csv_data.strip().split("\n")
+    if not lines or (len(lines) == 1 and not lines[0].strip()):
+        raise HTTPException(status_code=400, detail="No data submitted")
+        
+    reader = csv.reader(io.StringIO(csv_data.strip()))
+    
+    imported_categories = 0
+    imported_products = 0
+    imported_skus = 0
+    
+    cat_cache = {}
+    prod_cache = {}
+    
+    for row in reader:
+        if not row:
+            continue
+        # Skip header if it matches keywords
+        if row[0].lower().strip() in ["category", "category_name"]:
+            continue
+            
+        row = row + [""] * (7 - len(row))
+        cat_name = row[0].strip()
+        brand_name = row[1].strip()
+        manufacturer = row[2].strip() or None
+        sku_name = row[3].strip()
+        selling_price_str = row[4].strip()
+        buying_price_str = row[5].strip()
+        stock_str = row[6].strip()
+        
+        if not cat_name or not brand_name or not sku_name:
+            continue
+            
+        # 1. Resolve Category
+        cat_id = cat_cache.get(cat_name)
+        if not cat_id:
+            db_cat = db.query(models.Category).filter(
+                models.Category.shop_id == shop_id,
+                models.Category.name == cat_name
+            ).first()
+            if not db_cat:
+                db_cat = models.Category(shop_id=shop_id, name=cat_name)
+                db.add(db_cat)
+                db.flush()
+                imported_categories += 1
+            cat_id = db_cat.id
+            cat_cache[cat_name] = cat_id
+            
+        # 2. Resolve Product (Brand)
+        prod_key = (brand_name, cat_id)
+        prod_id = prod_cache.get(prod_key)
+        if not prod_id:
+            db_prod = db.query(models.Product).filter(
+                models.Product.shop_id == shop_id,
+                models.Product.brand_name == brand_name,
+                models.Product.category_id == cat_id
+            ).first()
+            if not db_prod:
+                db_prod = models.Product(
+                    shop_id=shop_id,
+                    client_id=str(uuid.uuid4()),
+                    brand_name=brand_name,
+                    category_id=cat_id,
+                    manufacturer=manufacturer,
+                    created_via=models.CreatedVia.admin
+                )
+                db.add(db_prod)
+                db.flush()
+                imported_products += 1
+            prod_id = db_prod.id
+            prod_cache[prod_key] = prod_id
+            
+        # 3. Create/Update SKU
+        existing_sku = db.query(models.SKU).filter(
+            models.SKU.shop_id == shop_id,
+            models.SKU.product_id == prod_id,
+            models.SKU.name == sku_name
+        ).first()
+        
+        selling_price = float(selling_price_str) if selling_price_str else 0.0
+        buying_price = float(buying_price_str) if buying_price_str else None
+        stock_qty = int(stock_str) if stock_str else None
+        
+        if existing_sku:
+            if selling_price > 0:
+                existing_sku.selling_price = Decimal(str(selling_price))
+            if buying_price is not None:
+                existing_sku.buying_price = Decimal(str(buying_price))
+                existing_sku.needs_cost_review = False
+            if stock_qty is not None:
+                existing_sku.stock_qty = stock_qty
+        else:
+            new_sku = models.SKU(
+                shop_id=shop_id,
+                client_id=str(uuid.uuid4()),
+                product_id=prod_id,
+                name=sku_name,
+                selling_price=Decimal(str(selling_price)),
+                buying_price=Decimal(str(buying_price)) if buying_price is not None else None,
+                needs_cost_review=(buying_price is None),
+                stock_qty=stock_qty,
+                created_via=models.CreatedVia.admin
+            )
+            db.add(new_sku)
+            imported_skus += 1
+            
+    db.commit()
+    
+    body = f"""
+    <h1>Import Successful!</h1>
+    <div class="card">
+      <h2 style="color: #2E5339;">Catalog Imported Successfully</h2>
+      <p style="margin-bottom: 20px;">Your items have been imported and synced to the select shop.</p>
+      
+      <div style="background: #F5F5F0; border-radius: 8px; padding: 20px; border: 1px solid #D8D2C2; margin-bottom: 24px;">
+        <p style="margin-bottom:8px;"><strong>Categories created:</strong> {imported_categories}</p>
+        <p style="margin-bottom:8px;"><strong>Brands/Products created:</strong> {imported_products}</p>
+        <p style="margin-bottom:0;"><strong>SKUs/Items created or updated:</strong> {imported_skus}</p>
+      </div>
+      
+      <a href="/admin/bulk-import" style="padding: 12px 20px; background: #2E5339; color: #fff; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 14px; display:inline-block;">Import another list</a>
+    </div>
+    """
+    return _base("Import Success", body)
