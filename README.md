@@ -14,15 +14,17 @@ The project is structured as a decoupled monorepo containing a high-performance 
 
 ```mermaid
 graph TD
-    subgraph Mobile Device (Offline-First)
-        App[React Native/Expo UI] --> DB[(Local SQLite)]
-        App --> Outbox[Outbox Queue]
-        Sync[Background Sync Worker] --> Outbox
+    subgraph "Mobile Device (Offline-First)"
+        App["React Native/Expo UI"] --> DB[("Local SQLite")]
+        App --> Outbox["Outbox Queue"]
+        Sync["Background Sync Worker"] --> Outbox
     end
-    subgraph Cloud Server
-        Sync <--> API[FastAPI Web Service]
-        API <--> CloudDB[(PostgreSQL)]
-        Admin[HTML Admin Dashboard] --> API
+    subgraph "Cloud Server"
+        Sync --> API["FastAPI Web Service"]
+        API --> Sync
+        API --> CloudDB[("PostgreSQL")]
+        CloudDB --> API
+        Admin["HTML Admin Dashboard"] --> API
     end
 ```
 
